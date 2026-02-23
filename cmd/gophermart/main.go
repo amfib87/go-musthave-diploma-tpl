@@ -33,7 +33,6 @@ func run() error {
 	cfg := config.Initialize()
 	cfg.ParseFlag()
 	logger.Lg.Debug("flags were parsed", zap.Any("cfg", cfg))
-	// TODO 	// defer logger.Sync()
 
 	// Инициализируем БД
 	storage, err := storage.IniInitialize(cfg.DBURI)
@@ -41,13 +40,17 @@ func run() error {
 		logger.Lg.Error("failed storage.IniInitialize:", zap.Error(err))
 		return fmt.Errorf("failed storage.IniInitialize: %w", err)
 	}
-	// TODO DB.Close()
 
 	// Инициализируем хэндлер
 	handler := handlers.Initialize(logger, cfg, storage)
+	defer handler.Close()
 
 	// Инициализируем роутер
 	router, err := router.Initialize(handler)
+	if err != nil {
+		logger.Lg.Error("router.Initialize:", zap.Error(err))
+		return fmt.Errorf("router.Initialize: %w", err)
+	}
 
 	logger.Lg.Info("running server", zap.String("cfg.RunAddress)", cfg.RunAddress))
 	if err := http.ListenAndServe(cfg.RunAddress, router); err != nil {
