@@ -21,6 +21,7 @@ type Storage interface {
 	GetDataAllOrders(ctx context.Context, login string) ([]LineOrder, error)
 	InsertNewRecordWithdraw(ctx context.Context, login, order string, sum float64) error
 	GetAllUserWithdraw(ctx context.Context, login string) ([]LineWithdraw, error)
+	Close() error
 }
 
 type PostgresStorage struct {
@@ -249,4 +250,8 @@ func (st PostgresStorage) GetAllUserWithdraw(ctx context.Context, login string) 
 	}
 
 	return data, nil
+}
+
+func (st PostgresStorage) Close() error {
+	return st.DB.Close()
 }

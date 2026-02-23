@@ -51,6 +51,11 @@ func Initialize(lg logger.TLog, cfg *config.Config, st storage.Storage) *Handler
 	}
 }
 
+func (hndl *Handler) Close() {
+	defer hndl.Stor.Close()
+	defer hndl.Log.Lg.Sync()
+}
+
 // Обработчик для Post "/api/user/register"
 func (hndl *Handler) PostRegUserHandler(res http.ResponseWriter, req *http.Request) {
 	hndl.Log.Lg.Debug("started PostRegUserHandle")
