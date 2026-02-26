@@ -2,7 +2,7 @@
 -- +goose StatementBegin
     CREATE TABLE IF NOT EXISTS users ( 
         login VARCHAR(100) UNIQUE NOT NULL, 
-        password_hash VARCHAR(255) NOT NULL
+        password_hash VARCHAR(255) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,        
     );
 
