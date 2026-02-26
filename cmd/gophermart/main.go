@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/amfib87/go-musthave-diploma-tpl/internal/config"
 	"github.com/amfib87/go-musthave-diploma-tpl/internal/handlers"
@@ -15,7 +16,8 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		panic(err)
+		log.Printf("Ошибка выполнения run(): %v", err)
+		os.Exit(1)
 	}
 }
 

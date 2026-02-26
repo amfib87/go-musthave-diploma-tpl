@@ -2,13 +2,15 @@ package storage
 
 import (
 	"context"
-	"database/sql"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
 
-	"github.com/amfib87/go-musthave-diploma-tpl/internal/service"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose"
 )
@@ -21,11 +23,11 @@ type Storage interface {
 	GetDataAllOrders(ctx context.Context, login string) ([]LineOrder, error)
 	InsertNewRecordWithdraw(ctx context.Context, login, order string, sum float64) error
 	GetAllUserWithdraw(ctx context.Context, login string) ([]LineWithdraw, error)
-	Close() error
+	Close()
 }
 
 type PostgresStorage struct {
-	DB *sql.DB
+	DB *pgxpool.Pool
 }
 
 // Структура для считывания данных из табдицы пользователей (users)
@@ -55,22 +57,35 @@ var ErrloginNoExist = errors.New("logon doesn't exist")
 // Инициализация базы данных
 func IniInitialize(path string) (PostgresStorage, error) {
 
-	db, err := sql.Open("pgx", path)
+	config, err := pgxpool.ParseConfig(path)
 	if err != nil {
-		return PostgresStorage{}, fmt.Errorf("failed sql.Open: %w", err)
+		return PostgresStorage{}, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Настройка параметров пула
+	config.MaxConns = 20
+	config.MinConns = 5
+	config.HealthCheckPeriod = 1 * time.Minute
+	config.MaxConnLifetime = 1 * time.Hour
+	config.MaxConnIdleTime = 30 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		return PostgresStorage{}, fmt.Errorf("failed to create pool: %w", err)
 	}
 
 	// Применяем миграции
-	if err := runMigrations(db); err != nil {
+	if err := runMigrations(pool); err != nil {
 		return PostgresStorage{}, fmt.Errorf("failed migration: %w", err)
 	}
-
-	return PostgresStorage{DB: db}, nil
-
+	return PostgresStorage{DB: pool}, nil
 }
 
 // Запускаем миграции
-func runMigrations(db *sql.DB) error {
+func runMigrations(pool *pgxpool.Pool) error {
+	// Конвертируем pgxpool.Pool в *sql.DB для совместимости с goose
+	db := stdlib.OpenDBFromPool(pool)
+
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("error goose.SetDialect: %w", err)
 	}
@@ -85,17 +100,17 @@ func runMigrations(db *sql.DB) error {
 // Функция сохранения новых данных о пользователе
 func (st PostgresStorage) InsertNewRecordUser(ctx context.Context, data LineUser) (string, error) {
 	// Хешируем пароль
-	passwHash := service.GetHash(data.Password)
+	passwHash := GetHash(data.Password)
 	encodedHash := base64.StdEncoding.EncodeToString(passwHash)
 
 	// Вставка новой записи в users
 	var newID string
 	query := `INSERT INTO users (login, password_hash) VALUES ($1, $2) ON CONFLICT (login) DO NOTHING RETURNING login`
-	err := st.DB.QueryRowContext(ctx, query, data.Login, encodedHash).Scan(&newID)
+	err := st.DB.QueryRow(ctx, query, data.Login, encodedHash).Scan(&newID)
 
 	// Обработка ошибок
 	switch {
-	case err == sql.ErrNoRows:
+	case err == pgx.ErrNoRows:
 		return "", fmt.Errorf("login already exist %s: %w", data.Login, ErrRecordExist)
 
 	case err != nil:
@@ -115,11 +130,11 @@ func (st PostgresStorage) InsertNewRecordOrder(ctx context.Context, data LineOrd
 
 	// Вставка новой записи в таблицу orders
 	query := `INSERT INTO orders (order_num, login) VALUES ($1, $2) ON CONFLICT (order_num) DO NOTHING RETURNING order_num`
-	err := st.DB.QueryRowContext(ctx, query, data.Order, data.Login).Scan(&newID)
+	err := st.DB.QueryRow(ctx, query, data.Order, data.Login).Scan(&newID)
 
 	// Обработка ошибок
 	switch {
-	case err == sql.ErrNoRows:
+	case err == pgx.ErrNoRows:
 		return data.Order, fmt.Errorf("order already exist %s: %w", data.Order, ErrRecordExist)
 
 	case err != nil:
@@ -135,11 +150,11 @@ func (st PostgresStorage) GetDataUser(ctx context.Context, login string) (LineUs
 	var data LineUser
 
 	query := `SELECT login, password_hash FROM users WHERE login = $1`
-	row := st.DB.QueryRowContext(ctx, query, login)
+	row := st.DB.QueryRow(ctx, query, login)
 	err := row.Scan(&data.Login, &data.Password)
 
 	switch {
-	case err == sql.ErrNoRows:
+	case err == pgx.ErrNoRows:
 		return LineUser{}, fmt.Errorf("login %s:%w", login, ErrloginNoExist)
 	case err != nil:
 		return LineUser{}, fmt.Errorf("failed select data user: %w", err)
@@ -154,12 +169,12 @@ func (st PostgresStorage) GetDataOrder(ctx context.Context, order string) (LineO
 
 	// Формиурем селект из таблицы
 	query := `SELECT order_num, login, uploaded FROM orders WHERE order_num = $1`
-	row := st.DB.QueryRowContext(ctx, query, order)
+	row := st.DB.QueryRow(ctx, query, order)
 	err := row.Scan(&data.Order, &data.Login, &data.Uploaded)
 
 	// Обработка ошибок
 	switch {
-	case err == sql.ErrNoRows:
+	case err == pgx.ErrNoRows:
 		return LineOrder{}, fmt.Errorf("order %s:%w", order, ErrloginNoExist)
 	case err != nil:
 		return LineOrder{}, fmt.Errorf("failed select data order: %w", err)
@@ -174,7 +189,7 @@ func (st PostgresStorage) GetDataAllOrders(ctx context.Context, login string) ([
 
 	// Формируем селект
 	query := `SELECT order_num, login, uploaded FROM orders WHERE login = $1`
-	rows, err := st.DB.QueryContext(ctx, query, login)
+	rows, err := st.DB.Query(ctx, query, login)
 	if err != nil {
 		return nil, fmt.Errorf("failed st.DB.QueryContext: %w", err)
 	}
@@ -204,11 +219,11 @@ func (st PostgresStorage) InsertNewRecordWithdraw(ctx context.Context, login, or
 
 	// Формируем запрос
 	query := `INSERT INTO withdraw (login, order_num, withdraw) VALUES ($1, $2, $3) ON CONFLICT (login, order_num) DO NOTHING RETURNING login, order_num`
-	err := st.DB.QueryRowContext(ctx, query, login, order, sum).Scan(&existLogin, &existOrder)
+	err := st.DB.QueryRow(ctx, query, login, order, sum).Scan(&existLogin, &existOrder)
 
 	// Обработка ошибок
 	switch {
-	case err == sql.ErrNoRows:
+	case err == pgx.ErrNoRows:
 		return fmt.Errorf("withdraw already exist %s, %s: %w", existOrder, existLogin, ErrRecordExist)
 
 	case err != nil:
@@ -228,7 +243,7 @@ func (st PostgresStorage) GetAllUserWithdraw(ctx context.Context, login string) 
 
 	// Формируем запрос
 	query := `SELECT login, order_num, withdraw, processed FROM withdraw WHERE login = $1`
-	rows, err := st.DB.QueryContext(ctx, query, login)
+	rows, err := st.DB.Query(ctx, query, login)
 	if err != nil {
 		return nil, fmt.Errorf("failed st.DB.QueryContext: %w", err)
 	}
@@ -252,6 +267,17 @@ func (st PostgresStorage) GetAllUserWithdraw(ctx context.Context, login string) 
 	return data, nil
 }
 
-func (st PostgresStorage) Close() error {
-	return st.DB.Close()
+func (st PostgresStorage) Close() {
+	st.DB.Close()
+}
+
+// Получаем хэш по значению
+func GetHash(value string) []byte {
+	byteKey := []byte(value)
+
+	h := sha256.New()
+	h.Write(byteKey)
+	hash := h.Sum(nil)
+
+	return hash
 }

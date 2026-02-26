@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,12 +23,6 @@ type Handler struct {
 	Log  logger.TLog
 	Cfg  *config.Config
 	Stor storage.Storage
-}
-
-// структура с данными пользователя
-type dataUserRegInp struct {
-	Login    string `json:"login"`
-	Password string `json:"password"`
 }
 
 // Утверждения для формирования куки
@@ -62,7 +55,6 @@ func (hndl *Handler) PostRegUserHandler(res http.ResponseWriter, req *http.Reque
 	hndl.Log.Lg.Debug("HTTP request received",
 		zap.String("method", req.Method),
 		zap.String("url", req.URL.String()),
-		zap.String("remote_addr", req.RemoteAddr),
 		zap.Any("headers", req.Header),
 		zap.Any("body", req.Body),
 	)
@@ -77,43 +69,26 @@ func (hndl *Handler) PostRegUserHandler(res http.ResponseWriter, req *http.Reque
 	}
 
 	// Парсим json
-	var dataUser dataUserRegInp
+	var dataUser service.DataUserRegInp
 	if err := json.Unmarshal(buf.Bytes(), &dataUser); err != nil {
 		hndl.Log.Lg.Error("failed json.Unmarshal: %v", zap.Error(err))
 		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Валидация данных
-	if dataUser.Login == "" {
-		hndl.Log.Lg.Info("login is empty")
-		http.Error(res, "login is empty", http.StatusBadRequest)
-		return
-	}
-
-	if dataUser.Password == "" {
-		hndl.Log.Lg.Info("password is empty")
-		http.Error(res, "password is empty", http.StatusBadRequest)
-		return
-	}
-	hndl.Log.Lg.Debug("", zap.String("login", dataUser.Login), zap.String("password", dataUser.Password))
-
-	// Сохраняем данные пользователя
-	_, err = hndl.Stor.InsertNewRecordUser(req.Context(),
-		storage.LineUser{
-			Login:    dataUser.Login,
-			Password: dataUser.Password})
+	err = service.SaveDataUser(req.Context(), dataUser, hndl.Log, hndl.Stor)
 	if errors.Is(err, storage.ErrRecordExist) { // Логин уже есть в БД
-		hndl.Log.Lg.Error(err.Error())
-		http.Error(res, "login already exist", http.StatusConflict)
+		http.Error(res, err.Error(), http.StatusConflict)
 		return
 	}
-	if err != nil { // неизвестная ошибка
-		hndl.Log.Lg.Error("error InsertNewRecordUser: %v", zap.Error(err))
+	if errors.Is(err, service.ErrPassIsEmpty) || errors.Is(err, service.ErrUserIsEmpty) {
+		http.Error(res, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err != nil {
 		http.Error(res, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	hndl.Log.Lg.Debug("data user was saved successfully")
 
 	var claims Сlaims
 	expiresAt := time.Now().Add(24 * time.Hour) // срок действия 24 часа
@@ -166,39 +141,24 @@ func (hndl Handler) PostAuthUserHandler(res http.ResponseWriter, req *http.Reque
 	}
 
 	// Парсим json
-	var dataUser dataUserRegInp
+	var dataUser service.DataUserRegInp
 	if err := json.Unmarshal(buf.Bytes(), &dataUser); err != nil {
 		hndl.Log.Lg.Error("failed json.Unmarshal: %v", zap.Error(err))
 		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Валидация данных
-	if dataUser.Login == "" {
-		hndl.Log.Lg.Info("login is empty")
-		http.Error(res, "login is empty", http.StatusBadRequest)
+	err = service.CheckHashPass(req.Context(), dataUser, hndl.Log, hndl.Stor)
+	if errors.Is(err, storage.ErrloginNoExist) || errors.Is(err, service.ErrPassIsWrong) {
+		http.Error(res, err.Error(), http.StatusUnauthorized)
 		return
 	}
-
-	if dataUser.Password == "" {
-		hndl.Log.Lg.Info("password is empty")
-		http.Error(res, "password is empty", http.StatusBadRequest)
+	if errors.Is(err, service.ErrPassIsEmpty) || errors.Is(err, service.ErrUserIsEmpty) {
+		http.Error(res, err.Error(), http.StatusBadRequest)
 		return
 	}
-	hndl.Log.Lg.Debug("", zap.String("login", dataUser.Login), zap.String("password", dataUser.Password))
-
-	// Считываем данные пользователя
-	dataUserDB, err := hndl.Stor.GetDataUser(req.Context(), dataUser.Login)
-	if errors.Is(err, storage.ErrloginNoExist) {
-		hndl.Log.Lg.Error("failed hndl.Stor.GetDataUser: %v", zap.Error(err))
-		http.Error(res, "login doesn't exist", http.StatusUnauthorized)
-		return
-	}
-
-	encodedHash := base64.StdEncoding.EncodeToString(service.GetHash(dataUser.Password))
-	if encodedHash != dataUserDB.Password {
-		hndl.Log.Lg.Error("password doesn't match", zap.Error(err))
-		http.Error(res, "password is wrong", http.StatusUnauthorized)
+	if err != nil {
+		http.Error(res, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
@@ -238,7 +198,6 @@ func (hndl Handler) PostDownOrderHandler(res http.ResponseWriter, req *http.Requ
 	hndl.Log.Lg.Debug("HTTP request received",
 		zap.String("method", req.Method),
 		zap.String("url", req.URL.String()),
-		zap.String("remote_addr", req.RemoteAddr),
 		zap.Any("headers", req.Header),
 		zap.Any("body", req.Body),
 	)
@@ -332,7 +291,7 @@ func (hndl Handler) PostDownOrderHandler(res http.ResponseWriter, req *http.Requ
 	}
 
 	if err != nil { // неизвестная ошибка
-		hndl.Log.Lg.Error("error InsertNewRecordOrder: %v", zap.Error(err))
+		hndl.Log.Lg.Error("error InsertNewRecordOrder:", zap.Error(err))
 		http.Error(res, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}

@@ -1,9 +1,10 @@
 module github.com/amfib87/go-musthave-diploma-tpl
 
-go 1.24.1
+go 1.25
 
 require (
 	github.com/go-chi/chi v1.5.5
+	github.com/go-resty/resty/v2 v2.17.2
 	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/pressly/goose v2.7.0+incompatible
@@ -16,6 +17,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
 )

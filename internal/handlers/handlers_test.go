@@ -19,7 +19,7 @@ type mockStorage struct {
 	getDataAllOrdersFunc        func(ctx context.Context, login string) ([]storage.LineOrder, error)
 	insertNewRecordWithdrawFunc func(ctx context.Context, login, order string, sum float64) error
 	getAllUserWithdrawFunc      func(ctx context.Context, login string) ([]storage.LineWithdraw, error)
-	closeFunc                   func() error
+	closeFunc                   func()
 }
 
 func (m *mockStorage) InsertNewRecordUser(ctx context.Context, data storage.LineUser) (string, error) {
@@ -71,11 +71,10 @@ func (m *mockStorage) GetAllUserWithdraw(ctx context.Context, login string) ([]s
 	return nil, nil
 }
 
-func (m *mockStorage) Close() error {
+func (m *mockStorage) Close() {
 	if m.getAllUserWithdrawFunc != nil {
-		return m.Close()
+		m.Close()
 	}
-	return nil
 }
 
 func TestInitialize(t *testing.T) {
